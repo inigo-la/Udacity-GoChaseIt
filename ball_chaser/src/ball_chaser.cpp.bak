@@ -1,0 +1,163 @@
+#include "ros/ros.h"
+#include "ball_chaser/DriveToTarget.h"
+#include <sensor_msgs/Image.h>
+
+
+class ProcesImageNode
+{
+    // ROS::NodeHandle
+    ros::NodeHandle node;
+
+    // ROS::ServiceServer command robot
+    ros::ServiceClient command_robot_svc_client;
+
+    // ROS::Subscriber process images
+    ros::Subscriber camera_image_subscriber;
+
+    // This function calls the command_robot service to drive the robot in the specified direction
+    void drive_robot(float lin_x, float ang_z)
+    {
+        // Request a service and pass the velocities to it to drive the robot
+        ball_chaser::DriveToTarget srv;
+        srv.request.linear_x = lin_x;
+        srv.request.angular_z = ang_z;
+
+        if (!command_robot_svc_client.call(srv))
+            ROS_ERROR("Failed to call service command_robot");
+    }
+
+    void process_image_callback(const sensor_msgs::Image img)
+    {
+        // Loop through each pixel in the image and check if there's a bright white one
+        // Then, identify if this pixel falls in the left, mid, or right side of the image
+        // Depending on the white ball position, call the drive_bot function and pass velocities to it
+        // Request a stop when there's no white ball seen by the camera
+        
+        float linear_x = 0;
+        float angular_z = 0;
+        
+        
+        
+        static bool info = false;
+        
+        if (!info)
+        {
+            ROS_INFO_STREAM("[ProcesImageNode] sensor_msgs::Image.msg info");
+            ROS_INFO_STREAM("[ProcesImageNode]  height    : " + std::to_string(img.height));
+            ROS_INFO_STREAM("[ProcesImageNode]  width     : " + std::to_string(img.width));
+            ROS_INFO_STREAM("[ProcesImageNode]  step      : " + std::to_string(img.step));
+            ROS_INFO_STREAM("[ProcesImageNode]  bigendian : " + std::to_string(img.is_bigendian));
+            ROS_INFO_STREAM("[ProcesImageNode]  encoding  : " + img.encoding);
+            info = true;
+        }
+        
+        
+        uint32_t size = img.step * img.height;
+        uint32_t offset = 0;
+        bool found = false;
+        const int white_pixel = 255;        
+
+        
+        for (; offset < size && !found; offset+=3)
+            if (img.data[offset + 0] == white_pixel &&
+                img.data[offset + 1] == white_pixel &&
+                img.data[offset + 2] == white_pixel)
+                found = true;
+
+        enum Command {eNone, eStop, eLeft, eRight, eForward};
+        static Command last_command = eNone;
+        static bool last_found = !found;
+
+                
+        if (found)
+        {
+            if (!last_found)
+            {
+                ROS_INFO_STREAM("[ProcesImageNode] white pixel found !!!");
+                last_found = true;
+            }
+            
+            static const uint32_t center_area_begin = img.width / 3;
+            static const uint32_t right_area_begin = center_area_begin * 2;        
+            
+            uint32_t col = offset % img.step;
+            if (col) col /= 3;
+            
+            if (col < center_area_begin)
+            {
+                if (last_command != eLeft)
+                {
+                    ROS_INFO_STREAM("[ProcesImageNode] go left");
+                    last_command = eLeft;
+                }
+                
+                // go left & slightly forward
+                angular_z = 0.5; 
+                linear_x = 0.2;
+            }
+            else if (col > right_area_begin)
+            {
+                if (last_command != eRight)
+                {
+                    ROS_INFO_STREAM("[ProcesImageNode] go right");
+                    last_command = eRight;
+                }
+
+                // go right & slightly forward
+                angular_z = -0.5;
+                linear_x = 0.2;
+            }
+            else
+            {
+                if (last_command != eForward)
+                {
+                    ROS_INFO_STREAM("[ProcesImageNode] go forward");
+                    last_command = eForward;
+                }
+                
+                linear_x = 0.5; // go forward
+            }
+        }
+        else
+        {
+            if (last_found)
+            {
+                ROS_INFO_STREAM("[ProcesImageNode] white pixel NOT found");
+                last_found = false;
+            }
+            
+            if (last_command != eStop)
+            {
+                ROS_INFO_STREAM("[ProcesImageNode] stop");
+                last_command = eStop;
+            }
+        }
+
+        drive_robot(linear_x, angular_z);
+    }
+
+public:
+    ProcesImageNode()
+        : node() // initialize ROS NodeHandle object
+        , command_robot_svc_client(node.serviceClient<ball_chaser::DriveToTarget>("/ball_chaser/command_robot")) // Define a client service capable of requesting services from command_robot
+        , camera_image_subscriber(node.subscribe("/camera/rgb/image_raw", 10, &ProcesImageNode::process_image_callback, this)) // Subscribe to /camera/rgb/image_raw topic to read the image data inside the process_image_callback function
+    {
+    }
+};
+
+
+template <typename _NodeImpl>
+void RunNodeSync(int argc, char** argv, const char* node_name)
+{
+    ros::init(argc, argv, node_name);
+    _NodeImpl node;
+    ros::spin();
+}
+
+
+int main(int argc, char** argv)
+{
+    // Run process_image node
+    RunNodeSync<ProcesImageNode>(argc, argv, "process_image");
+    return 0;
+}
