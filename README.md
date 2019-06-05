@@ -9,4 +9,4 @@ It is composed of 2 ROS packages:
 
 ### To build project
 
-Clone to a catkin workspace and build with catkin_build.
+Copy my_robot & ball_chaser directories to a working catkin workspace and build with catkin_build.
